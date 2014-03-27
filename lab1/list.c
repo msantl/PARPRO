@@ -8,7 +8,6 @@ void ListConstruct(struct list_t **head) {
 }
 
 void ListInsert(struct list_t **head, int id) {
-
     if (*head == NULL) {
         struct list_t *element = (struct list_t *) malloc(sizeof(struct list_t));
 
