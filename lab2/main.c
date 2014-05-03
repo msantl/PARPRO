@@ -17,7 +17,7 @@
 #define REQUEST         50
 
 #define THREAD_NUM      3
-#define MAX_DEPTH       10
+#define MAX_DEPTH       6
 
 void *(*thread_functions[THREAD_NUM])(void*);
 pthread_t threads[THREAD_NUM];
@@ -179,7 +179,7 @@ void *master(void *arg) {
                 if (BoardIsValidMove(&board, col)) {
 
                     /* find an available worker */
-                    while (ListEmpty(&q_worker_ready) == 1) {
+                    if (ListEmpty(&q_worker_ready) == 1) {
                         MPI_Recv(&result, 1, MPI_DOUBLE, MPI_ANY_SOURCE,
                                 MPI_ANY_TAG, MPI_COMM_WORLD, &status);
 
