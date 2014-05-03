@@ -6,11 +6,18 @@
 #include <err.h>
 #include <pthread.h>
 #include <signal.h>
+#include <unistd.h>
 
 #include "list.h"
 #include "board.h"
 
-#define THREAD_NUM 3
+#define WORKER_START    1
+#define WORKER_QUIT     2
+
+#define REQUEST         50
+
+#define THREAD_NUM      3
+#define MAX_DEPTH       10
 
 void *(*thread_functions[THREAD_NUM])(void*);
 pthread_t threads[THREAD_NUM];
@@ -29,20 +36,20 @@ void Exit(int sig) {
 
     MPI_Comm_rank(MPI_COMM_WORLD, &myid);
 
-    if (myid == 0) {
-        ListDestruct(&q_worker_ready);
-        BoardEnd();
-    }
-
     /* somebody won */
     if (RUNNING == 0) {
         if (CURRENT_PLAYER == HUMAN) {
-            printf("Computer won!\n");
+            BoardOutput("Computer won!\n");
         } else if (CURRENT_PLAYER == COMPUTER) {
-            printf("Human won!\n");
+            BoardOutput("Human won!\n");
         } else {
-            printf("Draw!\n");
+            BoardOutput("Draw!\n");
         }
+    }
+
+    if (myid == 0) {
+        ListDestruct(&q_worker_ready);
+        BoardEnd();
     }
 
     RUNNING = 0;
@@ -54,38 +61,95 @@ void Exit(int sig) {
     exit(0);
 }
 
+double EvaluateBoard(struct board_t *current, enum player_t last, int last_col, int depth) {
+    double result, total;
+    enum player_t now;
+    int all_win = 1, all_lose = 1;
+    int moves, col;
+
+    if (BoardIsGameOver(current, last_col)) {
+        if (last == COMPUTER) {
+            return 1;
+        } else {
+            return -1;
+        }
+    }
+
+    if (depth == 0) {
+        return 0;
+    }
+
+    if (last == COMPUTER) {
+        now = HUMAN;
+    } else {
+        now = COMPUTER;
+    }
+
+    total = 0;
+    moves = 0;
+
+    for (col = 0; col < BOARD_COLS; ++col) {
+        if (BoardIsValidMove(current, col)) {
+            moves ++;
+
+            BoardMove(current, col, now);
+            result = EvaluateBoard(current, now, col, depth - 1);
+            BoardUndoMove(current, col);
+
+            if (result > -1) all_lose = 0;
+            if (result <  1) all_win  = 0;
+
+            if (result ==  1 && now == COMPUTER) return  1;
+            if (result == -1 && now == HUMAN)    return -1;
+
+            total += result;
+        }
+    }
+
+    if (all_win)  return  1;
+    if (all_lose) return -1;
+
+    return total / moves;
+}
+
 void *worker(void *arg) {
-    /*
-     * recv type = RACUNAJ ili KRAJ
-     * recv board
-     * recv player_turn
-     * recv depth
-     *
-     * evaluate
-     *
-     * send result
-     */
+    struct board_t w_board;
+    enum player_t player;
+    int depth, col, type;
+
+    double result;
+
+    while (1) {
+        MPI_Recv(&type, 1, MPI_INT, MPI_ANY_SOURCE,
+            REQUEST, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+        if (type == WORKER_QUIT) {
+            break;
+        } else if (type == WORKER_START) {
+            MPI_Recv((char *)&w_board, sizeof(board), MPI_CHAR, MPI_ANY_SOURCE,
+                REQUEST, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Recv((char *)&player, sizeof(player), MPI_CHAR, MPI_ANY_SOURCE,
+                REQUEST, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Recv(&col, 1, MPI_INT, MPI_ANY_SOURCE,
+                REQUEST, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Recv(&depth, 1, MPI_INT, MPI_ANY_SOURCE,
+                REQUEST, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+            BoardMove(&w_board, col, player);
+            result = EvaluateBoard(&w_board, player, col, depth);
+
+            MPI_Send(&result, 1, MPI_DOUBLE, 0, col, MPI_COMM_WORLD);
+        }
+    }
 
     return NULL;
 }
 
 void *master(void *arg) {
-    /*
-     * foreach free_column as c:
-     *  find free worker
-     *  make a move as computer on c
-     *  send him board, computer, depth
-     *  undo move as computer on c
-     *
-     *  recv current result
-     *  update best result
-     *
-     * make a move on best result as computer
-     * let player play
-     */
-
-    int best_col, best_result;
-    int worker_id;
+    int jobs, best_col, col, worker_id, type, depth;
+    double best_result, result;
+    enum player_t player = COMPUTER;
+    MPI_Status status;
 
     while (RUNNING) {
         pthread_mutex_lock(&m_board);
@@ -94,18 +158,79 @@ void *master(void *arg) {
             pthread_cond_wait(&u_computer, &m_board);
         }
 
+        if (BoardIsDraw(&board)) {
+            RUNNING = 0;
+            CURRENT_PLAYER = EMPTY;
+        }
+
         if (RUNNING == 0) {
             pthread_mutex_unlock(&m_board);
             break;
         }
 
-        /* start of dummy moves */
-        for (best_col = 0; best_col < BOARD_COLS; ++best_col) {
-            if (BoardIsValidMove(&board, best_col)) {
-                break;
+        /* start workers */
+        best_col = -1;
+        jobs = 0;
+        depth = MAX_DEPTH;
+
+        do {
+
+            for (col = 0; col < BOARD_COLS; ++col) {
+                if (BoardIsValidMove(&board, col)) {
+
+                    /* find an available worker */
+                    while (ListEmpty(&q_worker_ready) == 1) {
+                        MPI_Recv(&result, 1, MPI_DOUBLE, MPI_ANY_SOURCE,
+                                MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+
+                        if (best_col == -1 || result > best_result) {
+                            best_result = result;
+                            best_col = status.MPI_TAG;
+                        }
+
+                        jobs --;
+
+                        ListInsert(&q_worker_ready, status.MPI_SOURCE);
+                    }
+
+                    worker_id = ListHead(&q_worker_ready);
+                    type = WORKER_START;
+
+                    MPI_Send(&type, 1, MPI_INT, worker_id, REQUEST, MPI_COMM_WORLD);
+                    /* board */
+                    MPI_Send((char *)&board, sizeof(board), MPI_CHAR, worker_id, REQUEST, MPI_COMM_WORLD);
+                    /* player */
+                    MPI_Send((char *)&player, sizeof(player), MPI_CHAR, worker_id, REQUEST, MPI_COMM_WORLD);
+                    /* column */
+                    MPI_Send(&col, 1, MPI_INT, worker_id, REQUEST, MPI_COMM_WORLD);
+                    /* depth */
+                    MPI_Send(&depth, 1, MPI_INT, worker_id, REQUEST, MPI_COMM_WORLD);
+
+                    jobs ++;
+
+                    ListRemove(&q_worker_ready, worker_id);
+                }
             }
-        }
-        /* end of dummy moves */
+
+            /* collect all results */
+            while (jobs > 0) {
+                MPI_Recv(&result, 1, MPI_DOUBLE, MPI_ANY_SOURCE,
+                        MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+
+                if (best_col == -1 || result > best_result) {
+                    best_result = result;
+                    best_col = status.MPI_TAG;
+                }
+
+                jobs --;
+
+                ListInsert(&q_worker_ready, status.MPI_SOURCE);
+            }
+
+            depth >>= 1;
+
+        } while (best_col == -1 && depth > 0);
+        /* end */
 
         BoardMove(&board, best_col, COMPUTER);
         BoardPrint(&board);
@@ -122,10 +247,10 @@ void *master(void *arg) {
     /* fire all workers */
     while (ListEmpty(&q_worker_ready) == 0) {
         worker_id = ListHead(&q_worker_ready);
+        type = WORKER_QUIT;
 
-        /*
-         * send message type that determines the end
-         */
+        /* send message type that determines the end */
+        MPI_Send(&type, 1, MPI_INT, worker_id, REQUEST, MPI_COMM_WORLD);
 
         ListRemove(&q_worker_ready, worker_id);
     }
@@ -134,13 +259,6 @@ void *master(void *arg) {
 }
 
 void *user_input(void *arg) {
-    /*
-     * draw board
-     * wait for user input
-     * update drawing
-     *
-     * let computer play
-     */
     int col;
 
     while (RUNNING) {
@@ -150,14 +268,17 @@ void *user_input(void *arg) {
             pthread_cond_wait(&u_human, &m_board);
         }
 
+        if (BoardIsDraw(&board)) {
+            RUNNING = 0;
+            CURRENT_PLAYER = EMPTY;
+        }
+
         if (RUNNING == 0) {
             pthread_mutex_unlock(&m_board);
             break;
         }
 
-        do {
-            col = BoardInput() - '1';
-        } while(BoardIsValidMove(&board, col) == 0);
+        do { col = BoardInput() - '1'; } while(BoardIsValidMove(&board, col) == 0);
 
         BoardMove(&board, col, HUMAN);
         BoardPrint(&board);

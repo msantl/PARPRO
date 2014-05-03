@@ -60,6 +60,16 @@ void BoardMove(struct board_t *board, int col, enum player_t player) {
     return;
 }
 
+void BoardUndoMove(struct board_t *board, int col) {
+    int i;
+
+    for (i = BOARD_ROWS - 1; i >= 0 && board->a[i][col] == EMPTY; --i);
+
+    board->a[i][col] = EMPTY;
+
+    return;
+}
+
 int BoardIsValidMove(struct board_t *board, int col) {
     int i;
 
@@ -77,29 +87,52 @@ int BoardIsValidMove(struct board_t *board, int col) {
 }
 
 int BoardIsGameOver(struct board_t *board, int col) {
-    int row, start, end;
+    int row;
+    int x1, x2, y1, y2;
 
     for (row = BOARD_ROWS - 1; row >= 0 && board->a[row][col] == EMPTY; --row);
 
     /* rows */
-    start = row;    end = row;
-    while (end < BOARD_ROWS && board->a[end][col] == board->a[row][col]) end++;
-    while (start >= 0 && board->a[start][col] == board->a[row][col]) --start;
+    y1 = row;   y2 = row;
+    while (y1 < BOARD_ROWS && board->a[y1][col] == board->a[row][col]) y1 ++;
+    while (y2 >= 0 && board->a[y2][col] == board->a[row][col]) y2 --;
 
-    if (end - start - 1 >= 4) return 1;
+    if (y1 - y2 - 1 >= 4) return 1;
 
     /* cols */
-    start = col;    end = col;
-    while (end < BOARD_COLS && board->a[row][end] == board->a[row][col]) end++;
-    while (start >= 0 && board->a[row][start] == board->a[row][col]) --start;
+    x1 = col;   x2 = col;
+    while (x1 < BOARD_COLS && board->a[row][x1] == board->a[row][col]) x1 ++;
+    while (x2 >= 0 && board->a[row][x2] == board->a[row][col]) x2 --;
 
-    if (end - start - 1 >= 4) return 1;
+    if (x1 - x2 - 1 >= 4) return 1;
 
     /* main diagonal */
+    x1 = col;   x2 = col;
+    y1 = row;   y2 = row;
+
+    while (x1 < BOARD_COLS && y1 < BOARD_ROWS && board->a[y1][x1] == board->a[row][col]) x1 ++, y1 ++;
+    while (x2 >= 0 && y2 >= 0 && board->a[y2][x2] == board->a[row][col]) x2 --, y2 --;
+
+    if (y1 - y2 - 1 >= 4) return 1;
 
     /* other diagonal*/
+    x1 = col;   x2 = col;
+    y1 = row;   y2 = row;
+
+    while (x1 >= 0 && y1 < BOARD_ROWS && board->a[y1][x1] == board->a[row][col]) x1 --, y1 ++;
+    while (x2 < BOARD_COLS && y2 >= 0 && board->a[y2][x2] == board->a[row][col]) x2 ++, y2 --;
+
+    if (x2 - x1 - 1 >= 4) return 1;
 
     return 0;
+}
+
+int BoardIsDraw(struct board_t *board) {
+    int i;
+    for (i = 0; i < BOARD_COLS; ++i) {
+        if (board->a[BOARD_ROWS - 1][i] == EMPTY) return 0;
+    }
+    return 1;
 }
 
 void BoardPrint(struct board_t *board) {
@@ -130,4 +163,11 @@ void BoardPrint(struct board_t *board) {
 char BoardInput(void) {
     int ch = getch();
     return ch;
+}
+
+void BoardOutput(char *c) {
+    move(startY + BOARD_ROWS + 1, startX);
+    printw(c);
+    refresh();
+    usleep(2000000);
 }
