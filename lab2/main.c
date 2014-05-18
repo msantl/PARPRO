@@ -19,6 +19,8 @@
 #define THREAD_NUM      3
 #define MAX_DEPTH       6
 
+int g_max_depth;
+
 void *(*thread_functions[THREAD_NUM])(void*);
 pthread_t threads[THREAD_NUM];
 
@@ -147,9 +149,16 @@ void *worker(void *arg) {
 
 void *master(void *arg) {
     int jobs, best_col, col, worker_id, type, depth;
+    int n_workers;
     double best_result, result;
+    double t_start, t_end;
     enum player_t player = COMPUTER;
     MPI_Status status;
+
+    MPI_Comm_size(MPI_COMM_WORLD, &n_workers);
+
+    fprintf(stderr, "DEPTH = %d\n", g_max_depth);
+    fprintf(stderr, "N_PROC = %d\n", n_workers);
 
     while (RUNNING) {
         pthread_mutex_lock(&m_board);
@@ -171,7 +180,10 @@ void *master(void *arg) {
         /* start workers */
         best_col = -1;
         jobs = 0;
-        depth = MAX_DEPTH;
+        depth = g_max_depth;
+
+        /* measure start time here */
+        t_start = MPI_Wtime();
 
         do {
 
@@ -231,6 +243,12 @@ void *master(void *arg) {
 
         } while (best_col == -1 && depth > 0);
         /* end */
+
+        /* measure end time here */
+        t_end = MPI_Wtime();
+
+        /* output time to stderr */
+        fprintf(stderr, "%.6lf\n", t_end - t_start);
 
         BoardMove(&board, best_col, COMPUTER);
         BoardPrint(&board);
@@ -297,6 +315,12 @@ void *user_input(void *arg) {
 
 int main(int argc, char **argv) {
     int myid, n_workers, status, n_thread, i;
+
+    if (argc == 2) {
+        sscanf(argv[1], "%d", &g_max_depth);
+    } else {
+        g_max_depth = MAX_DEPTH;
+    }
 
     if (MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &status) != MPI_SUCCESS) {
         errx(1, "MPI_Init_thread failed!");
