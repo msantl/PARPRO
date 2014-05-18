@@ -1,13 +1,13 @@
 #! /bin/bash
 
-# runs connect4 with depth from 1 to 10 with 1 to 8 processors and saves logs to
+# runs connect4 with depth from 4 to 10 with 1 to 8 processors and saves logs to
 # time/time_PROC_DEPTH.txt file
 
 EXE=./connect4
 
 make clean && make
 
-for depth in $(seq 10)
+for depth in $(seq 4 10)
 do
     for proc in $(seq 8) 
     do
